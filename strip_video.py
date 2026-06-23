@@ -133,7 +133,7 @@ NAMED_COLORS = {
     "lemonchiffon":   _rgb(255, 250, 205),
 }
 
-DEFAULT_CYCLE_COLORS = ["red", "green", "blue", "white", "black"]
+DEFAULT_CYCLE_COLORS = ["red", "hotpink", "cyan", "yellow", "lime", "white", "black"]
 
 
 def parse_color(s):
@@ -244,54 +244,128 @@ def update_margins(waves, prev_waves, half_cycles, extra_margins, random_margin,
 # Frame renderers (accept pre-computed float offsets)
 # ---------------------------------------------------------------------------
 
-def apply_lr(frame, n_strips, offsets, bg, pad_x, pad_y):
+def apply_lr(frame, n_strips, offsets, bg, pad_x, pad_y, shadow_x=0, shadow_y=0, sep=0.0):
     """Horizontal strips shifted left/right on expanded canvas."""
     h, w = frame.shape[:2]
     H_out, W_out = h + 2 * pad_y, w + 2 * pad_x
     canvas = np.full((H_out, W_out, 3), bg, dtype=np.uint8)
     strip_h = h // n_strips
+    center = (n_strips - 1) / 2.0
 
     for i in range(n_strips):
         y0 = i * strip_h
         y1 = y0 + strip_h if i < n_strips - 1 else h
         strip = frame[y0:y1]
+        sh = y1 - y0
         off = int(offsets[i])
+        sep_off = int(round((i - center) * sep))
 
-        dst_x = pad_x + off
-        src_x0 = max(0, -dst_x)
-        dst_x0 = max(0, dst_x)
-        src_x1 = min(w, W_out - dst_x)
-        if src_x1 > src_x0 and dst_x0 < W_out:
-            canvas[pad_y + y0: pad_y + y1, dst_x0: dst_x0 + (src_x1 - src_x0)] = strip[:, src_x0:src_x1]
+        cx = pad_x + off
+        cy = pad_y + y0 + sep_off
+
+        if shadow_x or shadow_y:
+            bx0 = max(0, cx + shadow_x)
+            bx1 = min(W_out, cx + shadow_x + w)
+            by0 = max(0, cy + shadow_y)
+            by1 = min(H_out, cy + shadow_y + sh)
+            if bx1 > bx0 and by1 > by0:
+                canvas[by0:by1, bx0:bx1] = 0
+
+        src_x0 = max(0, -cx);  dst_x0 = max(0, cx);  src_x1 = min(w, W_out - cx)
+        src_y0 = max(0, -cy);  dst_y0 = max(0, cy);  src_y1 = min(sh, H_out - cy)
+        if src_x1 > src_x0 and dst_x0 < W_out and src_y1 > src_y0 and dst_y0 < H_out:
+            canvas[dst_y0:dst_y0 + (src_y1 - src_y0),
+                   dst_x0:dst_x0 + (src_x1 - src_x0)] = strip[src_y0:src_y1, src_x0:src_x1]
 
     return canvas
 
 
-def apply_ud(frame, n_strips, offsets, bg, pad_x, pad_y):
+def apply_ud(frame, n_strips, offsets, bg, pad_x, pad_y, shadow_x=0, shadow_y=0, sep=0.0):
     """Vertical strips shifted up/down on expanded canvas."""
     h, w = frame.shape[:2]
     H_out, W_out = h + 2 * pad_y, w + 2 * pad_x
     canvas = np.full((H_out, W_out, 3), bg, dtype=np.uint8)
     strip_w = w // n_strips
+    center = (n_strips - 1) / 2.0
 
     for i in range(n_strips):
         x0 = i * strip_w
         x1 = x0 + strip_w if i < n_strips - 1 else w
         strip = frame[:, x0:x1]
+        sw = x1 - x0
         off = int(offsets[i])
+        sep_off = int(round((i - center) * sep))
 
-        dst_y = pad_y + off
-        src_y0 = max(0, -dst_y)
-        dst_y0 = max(0, dst_y)
-        src_y1 = min(h, H_out - dst_y)
-        if src_y1 > src_y0 and dst_y0 < H_out:
-            canvas[dst_y0: dst_y0 + (src_y1 - src_y0), pad_x + x0: pad_x + x1] = strip[src_y0:src_y1, :]
+        cx = pad_x + x0 + sep_off
+        cy = pad_y + off
+
+        if shadow_x or shadow_y:
+            bx0 = max(0, cx + shadow_x)
+            bx1 = min(W_out, cx + shadow_x + sw)
+            by0 = max(0, cy + shadow_y)
+            by1 = min(H_out, cy + shadow_y + h)
+            if bx1 > bx0 and by1 > by0:
+                canvas[by0:by1, bx0:bx1] = 0
+
+        src_x0 = max(0, -cx);  dst_x0 = max(0, cx);  src_x1 = min(sw, W_out - cx)
+        src_y0 = max(0, -cy);  dst_y0 = max(0, cy);  src_y1 = min(h, H_out - cy)
+        if src_x1 > src_x0 and dst_x0 < W_out and src_y1 > src_y0 and dst_y0 < H_out:
+            canvas[dst_y0:dst_y0 + (src_y1 - src_y0),
+                   dst_x0:dst_x0 + (src_x1 - src_x0)] = strip[src_y0:src_y1, src_x0:src_x1]
 
     return canvas
 
 
+def strip_sep_value(progress, peak_sep, peak_at=0.2):
+    """Rises linearly to peak_sep at peak_at, then decays linearly to 0 by end."""
+    if progress <= peak_at:
+        return peak_sep * (progress / peak_at)
+    return peak_sep * (1.0 - (progress - peak_at) / max(1.0 - peak_at, 1e-9))
+
+
 def blend_frames(a, b, alpha):
     return cv2.addWeighted(a, 1.0 - alpha, b, alpha, 0)
+
+
+def ramp_in_factor(t, t_start, ramp_secs):
+    """Cosine ease-in from 0→1 over ramp_secs after t_start."""
+    if ramp_secs <= 0:
+        return 1.0
+    elapsed = t - t_start
+    if elapsed <= 0:
+        return 0.0
+    if elapsed >= ramp_secs:
+        return 1.0
+    return (1.0 - math.cos(math.pi * elapsed / ramp_secs)) / 2.0
+
+
+def ramp_out_factor(t, t_end, ramp_secs):
+    """Cosine ease-out from 1→0 over ramp_secs before t_end."""
+    if ramp_secs <= 0:
+        return 1.0
+    remaining = t_end - t
+    if remaining <= 0:
+        return 0.0
+    if remaining >= ramp_secs:
+        return 1.0
+    return (1.0 - math.cos(math.pi * remaining / ramp_secs)) / 2.0
+
+
+def align_factor(t, interval, transition_secs):
+    """
+    1.0 normally; ramps linearly to 0 at each mode-switch boundary so strips
+    converge to zero offset/gap right at the transition, then diverge again.
+    """
+    if interval <= 0 or transition_secs <= 0:
+        return 1.0
+    half = transition_secs / 2.0
+    boundary_n = round(t / interval)
+    if boundary_n == 0:
+        return 1.0
+    dist = abs(t - boundary_n * interval)
+    if dist >= half:
+        return 1.0
+    return dist / half
 
 
 def fade_factor(t, interval, transition_at, total_secs, fade_frames, fps):
@@ -355,45 +429,71 @@ def main():
     p.add_argument("output", help="Output video file")
     p.add_argument("--mode", choices=["lr", "ud", "both"], default="both",
                    help="lr = horizontal strips only, ud = vertical only, both = transition")
-    p.add_argument("--n-lr", type=int, default=16, metavar="N",
+    p.add_argument("--n-lr", type=int, default=9, metavar="N",
                    help="Horizontal strips for the left-right phase")
-    p.add_argument("--n-ud", type=int, default=9, metavar="N",
+    p.add_argument("--n-ud", type=int, default=16, metavar="N",
                    help="Vertical strips for the up-down phase")
-    p.add_argument("--edge-margin", type=float, default=0.1, metavar="F",
-                   help="How far short of the canvas edge strips stop (0=touch edge, 0.2=20%% short)")
+    p.add_argument("--edge-margin", type=float, default=0.0, metavar="F",
+                   help="How far short of the travel limit strips stop (0=reach limit, 0.2=20%% short)")
+    p.add_argument("--overshoot", type=float, default=0.4, metavar="F",
+                   help="How far past the canvas edge strips travel, as a fraction of frame size (0.4 = 40%%)")
     p.add_argument("--random-margin", type=float, default=0.05, metavar="F",
                    help="Max extra random margin re-rolled each full oscillation cycle per strip")
-    p.add_argument("--freq", type=float, default=0.3,
+    p.add_argument("--freq", type=float, default=0.03,
                    help="Base oscillation frequency in Hz")
     p.add_argument("--freq-spread", type=float, default=0.35, metavar="F",
                    help="Per-strip frequency variation (0.35 = ±35%% of base freq)")
     p.add_argument("--phase-gap", type=float, default=math.pi,
                    help="Phase offset between adjacent strips (radians); pi = max anti-phase")
-    p.add_argument("--max-speed", type=float, default=25.0, metavar="PX/S",
+    p.add_argument("--max-speed", type=float, default=0, metavar="PX/S",
                    help="Max strip velocity in pixels/second (0 = auto: peak natural velocity for current amplitude+freq)")
     p.add_argument("--seed", type=int, default=42,
                    help="RNG seed for per-strip randomisation")
-    p.add_argument("--canvas-expand", type=float, default=0.2,
-                   help="Fractional canvas expansion (0.2 = 20%% larger each dimension)")
-    p.add_argument("--bg", default="black",
-                   help="Background color or 'cycle' to rotate through --colors")
-    p.add_argument("--colors", nargs="+", default=DEFAULT_CYCLE_COLORS, metavar="COLOR",
-                   help="Colors to cycle through with --bg cycle. Named (red, saddlebrown, …) or #RRGGBB hex.")
+    p.add_argument("--canvas-expand", type=float, default=0.35,
+                   help="Fractional canvas expansion (0.35 = 35%% larger each dimension)")
+    p.add_argument("--bg", default=None,
+                   help="Background color, 'cycle' to rotate through --colors, or unset (defaults to black, or cycle if --colors is given)")
+    p.add_argument("--colors", nargs="+", default=None, metavar="COLOR",
+                   help="Colors to cycle through (implies --bg cycle). Named (red, saddlebrown, …) or #RRGGBB hex.")
     p.add_argument("--color-hold", type=float, default=8.0, metavar="SEC",
                    help="Seconds each color is held at full brightness (cycle mode)")
-    p.add_argument("--color-fade", type=float, default=4.0, metavar="SEC",
-                   help="Seconds to fade in/out through black (cycle mode)")
-    p.add_argument("--interval", type=float, default=6.0, metavar="SEC",
+    p.add_argument("--color-fade", action="store_true",
+                   help="Fade each color in/out through black (cycle mode; off by default)")
+    p.add_argument("--color-fade-secs", type=float, default=4.0, metavar="SEC",
+                   help="Seconds to fade in/out through black when --color-fade is set")
+    p.add_argument("--interval", type=float, default=8.0, metavar="SEC",
                    help="Seconds between L/R ↔ U/D alternations in both mode (0 = single transition)")
-    p.add_argument("--transition-secs", type=float, default=0.5, metavar="SEC",
+    p.add_argument("--transition-secs", type=float, default=1.0, metavar="SEC",
                    help="Crossfade duration in seconds between modes (interval mode)")
     p.add_argument("--fade-frames", type=int, default=24, metavar="N",
                    help="Fade to black over N frames at each mode-switch boundary (0 = disabled, try 100)")
+    p.add_argument("--shadow-x", type=int, default=4, metavar="PX",
+                   help="Drop shadow offset rightward in pixels (0 = disabled)")
+    p.add_argument("--shadow-y", type=int, default=4, metavar="PX",
+                   help="Drop shadow offset downward in pixels (0 = disabled)")
+    p.add_argument("--strip-sep", type=float, default=4.0, metavar="PX",
+                   help="Peak gap between strips in pixels; rises then decays over the video")
+    p.add_argument("--static-begin", type=float, default=0.0, metavar="SEC",
+                   help="Seconds of unaltered video at the start before strips engage")
+    p.add_argument("--static-end", type=float, default=0.0, metavar="SEC",
+                   help="Seconds of unaltered video at the end after strips disengage")
+    p.add_argument("--ramp-begin", type=float, default=3.0, metavar="SEC",
+                   help="Seconds to ease-in strip amplitude after static-begin (cosine ramp, 0 = instant)")
+    p.add_argument("--ramp-end", type=float, default=3.0, metavar="SEC",
+                   help="Seconds to ease-out strip amplitude before static-end (cosine ramp, 0 = instant)")
     p.add_argument("--transition-at", type=float, default=0.5, metavar="F",
                    help="Fraction of video for single transition (both mode, interval=0 only)")
     p.add_argument("--transition-width", type=float, default=0.04, metavar="F",
                    help="Crossfade width as fraction of total duration (interval=0 only)")
     args = p.parse_args()
+
+    # --colors implies --bg cycle unless --bg was explicitly set
+    if args.colors is not None and args.bg is None:
+        args.bg = "cycle"
+    if args.colors is None:
+        args.colors = DEFAULT_CYCLE_COLORS
+    if args.bg is None:
+        args.bg = "black"
 
     bg_spec = parse_color(args.bg)
     cycle_colors = [parse_color(c) for c in args.colors]
@@ -412,9 +512,13 @@ def main():
     W_out  = W + 2 * pad_x
     H_out  = H + 2 * pad_y
 
-    # Base amplitudes: full pad minus the fixed edge margin
-    base_amp_lr = pad_x * (1.0 - args.edge_margin)
-    base_amp_ud = pad_y * (1.0 - args.edge_margin)
+    # Hard travel limits: canvas edge + allowed overshoot past the canvas edge.
+    clamp_lr = pad_x + int(W * args.overshoot)
+    clamp_ud = pad_y + int(H * args.overshoot)
+
+    # Base amplitudes: travel limit minus the edge margin buffer
+    base_amp_lr = clamp_lr * (1.0 - args.edge_margin)
+    base_amp_ud = clamp_ud * (1.0 - args.edge_margin)
 
     # Auto max-speed: peak natural velocity of the fastest possible strip
     # (amplitude × 2π × freq_max) so strips can actually reach their targets.
@@ -442,8 +546,13 @@ def main():
     wave_prev_ud     = [0.0] * args.n_ud
     half_cycles_lr   = [0]   * args.n_lr
     half_cycles_ud   = [0]   * args.n_ud
-    pos_lr           = [0.0] * args.n_lr
-    pos_ud           = [0.0] * args.n_ud
+
+    # Pre-initialise positions to the t=0 waveform values so strips start
+    # in their natural position and don't race to catch up on frame 1.
+    waves_lr_0 = compute_waves(args.n_lr, 0, args.freq, args.phase_gap, params_lr)
+    waves_ud_0 = compute_waves(args.n_ud, 0, args.freq, args.phase_gap, params_ud)
+    pos_lr = [max(-clamp_lr, min(clamp_lr, waves_lr_0[i] * base_amp_lr * (1.0 - extra_margin_lr[i]))) for i in range(args.n_lr)]
+    pos_ud = [max(-clamp_ud, min(clamp_ud, waves_ud_0[i] * base_amp_ud * (1.0 - extra_margin_ud[i]))) for i in range(args.n_ud)]
 
     fd_v, tmp_v = tempfile.mkstemp(suffix=".mp4")
     fd_a, tmp_a = tempfile.mkstemp(suffix=".aac")
@@ -463,6 +572,11 @@ def main():
     tr_lo  = args.transition_at - half_w
     tr_hi  = args.transition_at + half_w
 
+    total_secs    = total / fps
+    t_strip_start = args.static_begin
+    t_strip_end   = total_secs - args.static_end
+    active_dur    = max(t_strip_end - t_strip_start, 1.0 / fps)
+
     frame_idx = 0
     while True:
         ret, frame = cap.read()
@@ -472,53 +586,75 @@ def main():
         t        = frame_idx / fps
         progress = frame_idx / max(total - 1, 1)
 
-        bg = smooth_cycle_color(t, args.color_hold, args.color_fade, cycle_colors) if bg_spec == "cycle" else bg_spec
+        if bg_spec == "cycle":
+            fade_secs = args.color_fade_secs if args.color_fade else 0.0
+            bg = smooth_cycle_color(t, args.color_hold, fade_secs, cycle_colors)
+        else:
+            bg = bg_spec
 
-        # Raw waveform values this frame
+        # Always advance strip physics so motion is continuous when strips appear
         waves_lr = compute_waves(args.n_lr, t, args.freq, args.phase_gap, params_lr)
         waves_ud = compute_waves(args.n_ud, t, args.freq, args.phase_gap, params_ud)
-
-        # Re-roll random margins on full oscillation cycles
         update_margins(waves_lr, wave_prev_lr, half_cycles_lr, extra_margin_lr, args.random_margin, margin_rng)
         update_margins(waves_ud, wave_prev_ud, half_cycles_ud, extra_margin_ud, args.random_margin, margin_rng)
-
-        # Desired offsets: wave × effective amplitude per strip
         desired_lr = [waves_lr[i] * base_amp_lr * (1.0 - extra_margin_lr[i]) for i in range(args.n_lr)]
         desired_ud = [waves_ud[i] * base_amp_ud * (1.0 - extra_margin_ud[i]) for i in range(args.n_ud)]
+        pos_lr = speed_limit(desired_lr, pos_lr, max_delta, clamp_lr)
+        pos_ud = speed_limit(desired_ud, pos_ud, max_delta, clamp_ud)
 
-        # Speed limit + hard edge clamp
-        pos_lr = speed_limit(desired_lr, pos_lr, max_delta, pad_x)
-        pos_ud = speed_limit(desired_ud, pos_ud, max_delta, pad_y)
-
-        # Phase blend
-        if args.mode == "lr":
-            alpha = 0.0
-        elif args.mode == "ud":
-            alpha = 1.0
-        elif args.interval > 0:
-            alpha = alpha_for_interval(t, args.interval, args.transition_secs)
-        elif progress <= tr_lo:
-            alpha = 0.0
-        elif progress >= tr_hi:
-            alpha = 1.0
+        # Static begin / end: unaltered frame centred on canvas, no strip effects
+        if t < t_strip_start or t >= t_strip_end:
+            canvas = np.full((H_out, W_out, 3), bg, dtype=np.uint8)
+            canvas[pad_y:pad_y + H, pad_x:pad_x + W] = frame
+            result = canvas
         else:
-            alpha = (progress - tr_lo) / (tr_hi - tr_lo)
+            # Phase blend
+            if args.mode == "lr":
+                alpha = 0.0
+            elif args.mode == "ud":
+                alpha = 1.0
+            elif args.interval > 0:
+                alpha = alpha_for_interval(t, args.interval, args.transition_secs)
+            elif progress <= tr_lo:
+                alpha = 0.0
+            elif progress >= tr_hi:
+                alpha = 1.0
+            else:
+                alpha = (progress - tr_lo) / (tr_hi - tr_lo)
 
-        if args.mode == "both" and args.fade_frames > 0:
-            total_secs = total / fps
-            fac = fade_factor(t, args.interval, args.transition_at, total_secs,
-                              args.fade_frames, fps)
-            if fac < 1.0:
-                frame = (frame.astype(np.float32) * fac).astype(np.uint8)
+            if args.mode == "both" and args.fade_frames > 0:
+                fac = fade_factor(t, args.interval, args.transition_at, total_secs,
+                                  args.fade_frames, fps)
+                if fac < 1.0:
+                    frame = (frame.astype(np.float32) * fac).astype(np.uint8)
 
-        if alpha == 0.0:
-            result = apply_lr(frame, args.n_lr, pos_lr, bg, pad_x, pad_y)
-        elif alpha == 1.0:
-            result = apply_ud(frame, args.n_ud, pos_ud, bg, pad_x, pad_y)
-        else:
-            lr = apply_lr(frame, args.n_lr, pos_lr, bg, pad_x, pad_y)
-            ud = apply_ud(frame, args.n_ud, pos_ud, bg, pad_x, pad_y)
-            result = blend_frames(lr, ud, alpha)
+            # Separation uses progress within the active (non-static) window
+            active_progress = (t - t_strip_start) / active_dur
+            sep_val = strip_sep_value(active_progress, args.strip_sep)
+
+            # Scale factor: ease-in × ease-out × alignment at transitions
+            ramp  = ramp_in_factor(t, t_strip_start, args.ramp_begin) \
+                  * ramp_out_factor(t, t_strip_end, args.ramp_end)
+            a_fac = align_factor(t, args.interval, args.transition_secs) \
+                    if args.mode == "both" and args.interval > 0 else 1.0
+            scale = ramp * a_fac
+
+            pos_lr_draw = [p * scale for p in pos_lr]
+            pos_ud_draw = [p * scale for p in pos_ud]
+            sep_draw    = sep_val * scale
+
+            if alpha == 0.0:
+                result = apply_lr(frame, args.n_lr, pos_lr_draw, bg, pad_x, pad_y,
+                                   args.shadow_x, args.shadow_y, sep_draw)
+            elif alpha == 1.0:
+                result = apply_ud(frame, args.n_ud, pos_ud_draw, bg, pad_x, pad_y,
+                                   args.shadow_x, args.shadow_y, sep_draw)
+            else:
+                lr = apply_lr(frame, args.n_lr, pos_lr_draw, bg, pad_x, pad_y,
+                              args.shadow_x, args.shadow_y, sep_draw)
+                ud = apply_ud(frame, args.n_ud, pos_ud_draw, bg, pad_x, pad_y,
+                              args.shadow_x, args.shadow_y, sep_draw)
+                result = blend_frames(lr, ud, alpha)
 
         writer.write(result)
         frame_idx += 1
