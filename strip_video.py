@@ -189,14 +189,24 @@ def _wave(name, x):
 
 
 def build_strip_params(n_strips, freq_spread, seed):
-    """Returns list of (freq_scale, waveform_name, extra_phase) per strip."""
+    """Returns list of (freq_scale, waveform_name, extra_phase) per strip.
+
+    Phases are stratified: [0, 2π] is divided into n_strips equal bins and one
+    sample is drawn from each bin before shuffling. This guarantees that no two
+    strips share a phase bucket, preventing the visible clustering that occurs
+    when purely random phases happen to land near each other.
+    """
     rng = np.random.default_rng(seed)
+    # Stratified phase: one sample per bin, shuffled for strip assignment
+    bin_size = 2 * math.pi / n_strips
+    phase_offsets = (np.arange(n_strips) * bin_size
+                     + rng.uniform(0.0, bin_size, n_strips)) % (2 * math.pi)
+    rng.shuffle(phase_offsets)
     params = []
-    for _ in range(n_strips):
+    for i in range(n_strips):
         freq_scale = float(rng.uniform(1.0 - freq_spread, 1.0 + freq_spread))
         waveform = WAVEFORM_NAMES[int(rng.integers(0, len(WAVEFORM_NAMES)))]
-        extra_phase = float(rng.uniform(0, 2 * math.pi))
-        params.append((freq_scale, waveform, extra_phase))
+        params.append((freq_scale, waveform, float(phase_offsets[i])))
     return params
 
 
@@ -395,25 +405,13 @@ def fade_factor(t, interval, transition_at, total_secs, fade_frames, fps):
     return (dist / half_window) ** 0.4
 
 
-def alpha_for_interval(t, interval, fade_secs):
+def alpha_for_interval(t, interval):
     """
-    Returns blend alpha (0=lr, 1=ud) for repeating interval mode.
-    Alternates lr→ud→lr every `interval` seconds with a crossfade at each boundary.
+    Returns mode alpha (0=lr, 1=ud) for repeating interval mode — hard cut only.
+    Strip positions are already converged to zero at each boundary by align_factor,
+    so the cut is invisible; blending is not needed and creates ghost overlays.
     """
-    half_fade = fade_secs / 2
-    boundary_n = round(t / interval)          # index of nearest boundary
-    dist = t - boundary_n * interval          # signed distance from that boundary
-
-    if boundary_n == 0 or abs(dist) >= half_fade:
-        # Fully in one mode; which mode depends on which side of the nearest boundary
-        return float(int(t / interval) % 2)
-
-    # Inside crossfade window
-    progress = (dist + half_fade) / fade_secs    # 0→1 across the window
-    if boundary_n % 2 == 1:                       # odd boundary: lr→ud
-        return max(0.0, min(1.0, progress))
-    else:                                          # even boundary: ud→lr
-        return max(0.0, min(1.0, 1.0 - progress))
+    return float(int(t / interval) % 2)
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +437,7 @@ def main():
                    help="How far past the canvas edge strips travel, as a fraction of frame size (0.4 = 40%%)")
     p.add_argument("--random-margin", type=float, default=0.05, metavar="F",
                    help="Max extra random margin re-rolled each full oscillation cycle per strip")
-    p.add_argument("--freq", type=float, default=0.03,
+    p.add_argument("--freq", type=float, default=0.042,
                    help="Base oscillation frequency in Hz")
     p.add_argument("--freq-spread", type=float, default=0.35, metavar="F",
                    help="Per-strip frequency variation (0.35 = ±35%% of base freq)")
@@ -461,9 +459,9 @@ def main():
                    help="Fade each color in/out through black (cycle mode; off by default)")
     p.add_argument("--color-fade-secs", type=float, default=4.0, metavar="SEC",
                    help="Seconds to fade in/out through black when --color-fade is set")
-    p.add_argument("--interval", type=float, default=8.0, metavar="SEC",
+    p.add_argument("--interval", type=float, default=14.0, metavar="SEC",
                    help="Seconds between L/R ↔ U/D alternations in both mode (0 = single transition)")
-    p.add_argument("--transition-secs", type=float, default=1.0, metavar="SEC",
+    p.add_argument("--transition-secs", type=float, default=2.5, metavar="SEC",
                    help="Crossfade duration in seconds between modes (interval mode)")
     p.add_argument("--fade-frames", type=int, default=24, metavar="N",
                    help="Fade to black over N frames at each mode-switch boundary (0 = disabled, try 100)")
@@ -547,12 +545,11 @@ def main():
     half_cycles_lr   = [0]   * args.n_lr
     half_cycles_ud   = [0]   * args.n_ud
 
-    # Pre-initialise positions to the t=0 waveform values so strips start
-    # in their natural position and don't race to catch up on frame 1.
-    waves_lr_0 = compute_waves(args.n_lr, 0, args.freq, args.phase_gap, params_lr)
-    waves_ud_0 = compute_waves(args.n_ud, 0, args.freq, args.phase_gap, params_ud)
-    pos_lr = [max(-clamp_lr, min(clamp_lr, waves_lr_0[i] * base_amp_lr * (1.0 - extra_margin_lr[i]))) for i in range(args.n_lr)]
-    pos_ud = [max(-clamp_ud, min(clamp_ud, waves_ud_0[i] * base_amp_ud * (1.0 - extra_margin_ud[i]))) for i in range(args.n_ud)]
+    # Positions start at zero. The ramp factor is baked into desired positions
+    # before physics, so strips naturally grow from zero rather than chasing
+    # large pre-computed targets on the first rendered frame.
+    pos_lr = [0.0] * args.n_lr
+    pos_ud = [0.0] * args.n_ud
 
     fd_v, tmp_v = tempfile.mkstemp(suffix=".mp4")
     fd_a, tmp_a = tempfile.mkstemp(suffix=".aac")
@@ -592,13 +589,18 @@ def main():
         else:
             bg = bg_spec
 
+        # Ramp factor: 0 during static periods, cosine ease during ramps, 1 at full effect.
+        # Applied to desired positions before physics so strips grow from zero naturally.
+        ramp = (ramp_in_factor(t, t_strip_start, args.ramp_begin)
+                * ramp_out_factor(t, t_strip_end, args.ramp_end))
+
         # Always advance strip physics so motion is continuous when strips appear
         waves_lr = compute_waves(args.n_lr, t, args.freq, args.phase_gap, params_lr)
         waves_ud = compute_waves(args.n_ud, t, args.freq, args.phase_gap, params_ud)
         update_margins(waves_lr, wave_prev_lr, half_cycles_lr, extra_margin_lr, args.random_margin, margin_rng)
         update_margins(waves_ud, wave_prev_ud, half_cycles_ud, extra_margin_ud, args.random_margin, margin_rng)
-        desired_lr = [waves_lr[i] * base_amp_lr * (1.0 - extra_margin_lr[i]) for i in range(args.n_lr)]
-        desired_ud = [waves_ud[i] * base_amp_ud * (1.0 - extra_margin_ud[i]) for i in range(args.n_ud)]
+        desired_lr = [waves_lr[i] * base_amp_lr * (1.0 - extra_margin_lr[i]) * ramp for i in range(args.n_lr)]
+        desired_ud = [waves_ud[i] * base_amp_ud * (1.0 - extra_margin_ud[i]) * ramp for i in range(args.n_ud)]
         pos_lr = speed_limit(desired_lr, pos_lr, max_delta, clamp_lr)
         pos_ud = speed_limit(desired_ud, pos_ud, max_delta, clamp_ud)
 
@@ -614,7 +616,7 @@ def main():
             elif args.mode == "ud":
                 alpha = 1.0
             elif args.interval > 0:
-                alpha = alpha_for_interval(t, args.interval, args.transition_secs)
+                alpha = alpha_for_interval(t, args.interval)
             elif progress <= tr_lo:
                 alpha = 0.0
             elif progress >= tr_hi:
@@ -632,12 +634,11 @@ def main():
             active_progress = (t - t_strip_start) / active_dur
             sep_val = strip_sep_value(active_progress, args.strip_sep)
 
-            # Scale factor: ease-in × ease-out × alignment at transitions
-            ramp  = ramp_in_factor(t, t_strip_start, args.ramp_begin) \
-                  * ramp_out_factor(t, t_strip_end, args.ramp_end)
+            # Alignment scale: converge strips to zero at each mode-switch boundary.
+            # Ramp is already baked into the physics positions above.
             a_fac = align_factor(t, args.interval, args.transition_secs) \
                     if args.mode == "both" and args.interval > 0 else 1.0
-            scale = ramp * a_fac
+            scale = a_fac
 
             pos_lr_draw = [p * scale for p in pos_lr]
             pos_ud_draw = [p * scale for p in pos_ud]

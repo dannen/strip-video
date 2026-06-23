@@ -68,7 +68,7 @@ uv run python3 strip_video.py input.mp4 output.mp4 --static-begin 6 --static-end
 | `--mode` | `both` | `lr` = horizontal strips only, `ud` = vertical only, `both` = alternate |
 | `--n-lr` | `9` | Number of horizontal strips (left-right phase) |
 | `--n-ud` | `16` | Number of vertical strips (up-down phase) |
-| `--freq` | `0.03` | Base oscillation frequency in Hz (~33s per cycle) |
+| `--freq` | `0.042` | Base oscillation frequency in Hz (~24s per cycle) |
 | `--freq-spread` | `0.35` | Per-strip frequency variation (±35% of base freq) |
 | `--phase-gap` | `π` | Phase offset between adjacent strips — π = maximum anti-phase |
 | `--max-speed` | `0` | Max strip velocity in px/s (0 = auto: scales with amplitude × freq) |
@@ -115,8 +115,8 @@ uv run python3 strip_video.py input.mp4 output.mp4 --static-begin 6 --static-end
 
 | Flag | Default | Description |
 |---|---|---|
-| `--interval` | `8.0` | Seconds between lr ↔ ud alternations in `both` mode (0 = single transition) |
-| `--transition-secs` | `1.0` | Crossfade duration between modes; strips converge to zero offset at each boundary |
+| `--interval` | `14.0` | Seconds between lr ↔ ud alternations in `both` mode (0 = single transition) |
+| `--transition-secs` | `2.5` | Crossfade duration between modes; strips converge to zero offset at each boundary |
 | `--transition-at` | `0.5` | Fraction of video for single transition (interval=0 only) |
 | `--transition-width` | `0.04` | Crossfade width as fraction of total duration (interval=0 only) |
 
