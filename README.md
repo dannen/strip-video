@@ -116,7 +116,7 @@ uv run python3 strip_video.py input.mp4 output.mp4 --static-begin 6 --static-end
 | Flag | Default | Description |
 |---|---|---|
 | `--interval` | `14.0` | Seconds between lr ↔ ud alternations in `both` mode (0 = single transition) |
-| `--transition-secs` | `2.5` | Crossfade duration between modes; strips converge to zero offset at each boundary |
+| `--transition-secs` | `auto` | Convergence window at each lr↔ud boundary in seconds; auto = `π×amplitude/max_speed`, capped at 65% of interval |
 | `--transition-at` | `0.5` | Fraction of video for single transition (interval=0 only) |
 | `--transition-width` | `0.04` | Crossfade width as fraction of total duration (interval=0 only) |
 

@@ -363,8 +363,9 @@ def ramp_out_factor(t, t_end, ramp_secs):
 
 def align_factor(t, interval, transition_secs):
     """
-    1.0 normally; ramps linearly to 0 at each mode-switch boundary so strips
-    converge to zero offset/gap right at the transition, then diverge again.
+    1.0 normally; eases to 0 at each mode-switch boundary via cosine curve so
+    strips converge to zero offset/gap right at the transition, then diverge.
+    Cosine ease means the motion starts and ends slowly — no abrupt jerk.
     """
     if interval <= 0 or transition_secs <= 0:
         return 1.0
@@ -375,7 +376,7 @@ def align_factor(t, interval, transition_secs):
     dist = abs(t - boundary_n * interval)
     if dist >= half:
         return 1.0
-    return dist / half
+    return (1.0 - math.cos(math.pi * dist / half)) / 2.0
 
 
 def fade_factor(t, interval, transition_at, total_secs, fade_frames, fps):
@@ -461,8 +462,8 @@ def main():
                    help="Seconds to fade in/out through black when --color-fade is set")
     p.add_argument("--interval", type=float, default=14.0, metavar="SEC",
                    help="Seconds between L/R ↔ U/D alternations in both mode (0 = single transition)")
-    p.add_argument("--transition-secs", type=float, default=2.5, metavar="SEC",
-                   help="Crossfade duration in seconds between modes (interval mode)")
+    p.add_argument("--transition-secs", type=float, default=-1.0, metavar="SEC",
+                   help="Convergence window in seconds at each lr↔ud boundary (-1 = auto: 2×amplitude/max_speed)")
     p.add_argument("--fade-frames", type=int, default=24, metavar="N",
                    help="Fade to black over N frames at each mode-switch boundary (0 = disabled, try 100)")
     p.add_argument("--shadow-x", type=int, default=4, metavar="PX",
@@ -528,10 +529,21 @@ def main():
         max_speed = args.max_speed
     max_delta = max_speed / fps
 
+    # Auto transition-secs: with cosine ease the peak rate of change of desired
+    # position is amp * π / transition_secs; physics can only track it when that
+    # ≤ max_speed, so the minimum window is π * amp / max_speed.
+    # Capped at 65% of interval so there's always meaningful full-effect time.
+    transition_auto = args.transition_secs < 0
+    if transition_auto:
+        args.transition_secs = math.pi * max(base_amp_lr, base_amp_ud) / max_speed
+        if args.interval > 0:
+            args.transition_secs = min(args.transition_secs, args.interval * 0.65)
+
     print(f"Input:  {W}x{H} @ {fps:.2f} fps, {total} frames")
     print(f"Output: {W_out}x{H_out}  mode={args.mode}  "
           f"amp_lr={base_amp_lr:.1f}px  amp_ud={base_amp_ud:.1f}px  "
-          f"max-speed={max_speed:.1f}px/s{'  (auto)' if args.max_speed <= 0 else ''}")
+          f"max-speed={max_speed:.1f}px/s{'  (auto)' if args.max_speed <= 0 else ''}  "
+          f"transition={args.transition_secs:.1f}s{'  (auto)' if transition_auto else ''}")
 
     params_lr = build_strip_params(args.n_lr, args.freq_spread, args.seed)
     params_ud = build_strip_params(args.n_ud, args.freq_spread, args.seed + 1)
@@ -574,6 +586,7 @@ def main():
     t_strip_end   = total_secs - args.static_end
     active_dur    = max(t_strip_end - t_strip_start, 1.0 / fps)
 
+    prev_phase = 0
     frame_idx = 0
     while True:
         ret, frame = cap.read()
@@ -589,10 +602,27 @@ def main():
         else:
             bg = bg_spec
 
-        # Ramp factor: 0 during static periods, cosine ease during ramps, 1 at full effect.
-        # Applied to desired positions before physics so strips grow from zero naturally.
-        ramp = (ramp_in_factor(t, t_strip_start, args.ramp_begin)
-                * ramp_out_factor(t, t_strip_end, args.ramp_end))
+        # Ramp: 0 during static periods, cosine ease during ramps, 1 at full effect.
+        # Baked into desired so physics grows/shrinks naturally rather than bursting.
+        ramp  = (ramp_in_factor(t, t_strip_start, args.ramp_begin)
+                 * ramp_out_factor(t, t_strip_end, args.ramp_end))
+
+        # Alignment factor: cosine ease to 0 at each lr↔ud boundary, back to 1.
+        # Applied at draw time (not in desired) so pos_draw is guaranteed to be
+        # exactly zero at the boundary frame regardless of physics position.
+        a_fac = (align_factor(t, args.interval, args.transition_secs)
+                 if args.mode == "both" and args.interval > 0 else 1.0)
+
+        # At each mode boundary, reset the incoming mode's physics to zero.
+        # Without this, the new mode has large physics positions and
+        # pos_draw = large_pos * rising_a_fac accelerates visibly.
+        curr_phase = int(t / args.interval) % 2 if args.mode == "both" and args.interval > 0 else 0
+        if curr_phase != prev_phase:
+            if curr_phase == 1:
+                pos_ud = [0.0] * args.n_ud
+            else:
+                pos_lr = [0.0] * args.n_lr
+        prev_phase = curr_phase
 
         # Always advance strip physics so motion is continuous when strips appear
         waves_lr = compute_waves(args.n_lr, t, args.freq, args.phase_gap, params_lr)
@@ -634,15 +664,12 @@ def main():
             active_progress = (t - t_strip_start) / active_dur
             sep_val = strip_sep_value(active_progress, args.strip_sep)
 
-            # Alignment scale: converge strips to zero at each mode-switch boundary.
-            # Ramp is already baked into the physics positions above.
-            a_fac = align_factor(t, args.interval, args.transition_secs) \
-                    if args.mode == "both" and args.interval > 0 else 1.0
-            scale = a_fac
-
-            pos_lr_draw = [p * scale for p in pos_lr]
-            pos_ud_draw = [p * scale for p in pos_ud]
-            sep_draw    = sep_val * scale
+            # a_fac=0 at the boundary guarantees visual alignment regardless of physics.
+            # New-mode physics was reset to 0 at the cut so pos_new * rising_a_fac
+            # grows from 0×0, preventing the acceleration burst.
+            pos_lr_draw = [p * a_fac for p in pos_lr]
+            pos_ud_draw = [p * a_fac for p in pos_ud]
+            sep_draw    = sep_val * a_fac
 
             if alpha == 0.0:
                 result = apply_lr(frame, args.n_lr, pos_lr_draw, bg, pad_x, pad_y,
