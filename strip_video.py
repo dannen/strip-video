@@ -254,7 +254,7 @@ def update_margins(waves, prev_waves, half_cycles, extra_margins, random_margin,
 # Frame renderers (accept pre-computed float offsets)
 # ---------------------------------------------------------------------------
 
-def apply_lr(frame, n_strips, offsets, bg, pad_x, pad_y, shadow_x=0, shadow_y=0, sep=0.0):
+def apply_lr(frame, n_strips, offsets, bg, pad_x, pad_y, shadow_x=0, shadow_y=0, sep=0.0, shadow_color=(0, 0, 0)):
     """Horizontal strips shifted left/right on expanded canvas."""
     h, w = frame.shape[:2]
     H_out, W_out = h + 2 * pad_y, w + 2 * pad_x
@@ -279,7 +279,7 @@ def apply_lr(frame, n_strips, offsets, bg, pad_x, pad_y, shadow_x=0, shadow_y=0,
             by0 = max(0, cy + shadow_y)
             by1 = min(H_out, cy + shadow_y + sh)
             if bx1 > bx0 and by1 > by0:
-                canvas[by0:by1, bx0:bx1] = 0
+                canvas[by0:by1, bx0:bx1] = shadow_color
 
         src_x0 = max(0, -cx);  dst_x0 = max(0, cx);  src_x1 = min(w, W_out - cx)
         src_y0 = max(0, -cy);  dst_y0 = max(0, cy);  src_y1 = min(sh, H_out - cy)
@@ -290,7 +290,7 @@ def apply_lr(frame, n_strips, offsets, bg, pad_x, pad_y, shadow_x=0, shadow_y=0,
     return canvas
 
 
-def apply_ud(frame, n_strips, offsets, bg, pad_x, pad_y, shadow_x=0, shadow_y=0, sep=0.0):
+def apply_ud(frame, n_strips, offsets, bg, pad_x, pad_y, shadow_x=0, shadow_y=0, sep=0.0, shadow_color=(0, 0, 0)):
     """Vertical strips shifted up/down on expanded canvas."""
     h, w = frame.shape[:2]
     H_out, W_out = h + 2 * pad_y, w + 2 * pad_x
@@ -315,7 +315,7 @@ def apply_ud(frame, n_strips, offsets, bg, pad_x, pad_y, shadow_x=0, shadow_y=0,
             by0 = max(0, cy + shadow_y)
             by1 = min(H_out, cy + shadow_y + h)
             if bx1 > bx0 and by1 > by0:
-                canvas[by0:by1, bx0:bx1] = 0
+                canvas[by0:by1, bx0:bx1] = shadow_color
 
         src_x0 = max(0, -cx);  dst_x0 = max(0, cx);  src_x1 = min(sw, W_out - cx)
         src_y0 = max(0, -cy);  dst_y0 = max(0, cy);  src_y1 = min(h, H_out - cy)
@@ -428,10 +428,10 @@ def main():
     p.add_argument("output", help="Output video file")
     p.add_argument("--mode", choices=["lr", "ud", "both"], default="both",
                    help="lr = horizontal strips only, ud = vertical only, both = transition")
-    p.add_argument("--n-lr", type=int, default=9, metavar="N",
-                   help="Horizontal strips for the left-right phase")
-    p.add_argument("--n-ud", type=int, default=16, metavar="N",
-                   help="Vertical strips for the up-down phase")
+    p.add_argument("--n-lr", type=int, default=None, metavar="N",
+                   help="Horizontal strips for the left-right phase (default 9 landscape, 16 portrait)")
+    p.add_argument("--n-ud", type=int, default=None, metavar="N",
+                   help="Vertical strips for the up-down phase (default 16 landscape, 9 portrait)")
     p.add_argument("--edge-margin", type=float, default=0.0, metavar="F",
                    help="How far short of the travel limit strips stop (0=reach limit, 0.2=20%% short)")
     p.add_argument("--overshoot", type=float, default=0.4, metavar="F",
@@ -470,6 +470,8 @@ def main():
                    help="Drop shadow offset rightward in pixels (0 = disabled)")
     p.add_argument("--shadow-y", type=int, default=4, metavar="PX",
                    help="Drop shadow offset downward in pixels (0 = disabled)")
+    p.add_argument("--shadow-color", default="black", metavar="COLOR",
+                   help="Drop shadow color — named (red, white, …) or #RRGGBB hex")
     p.add_argument("--strip-sep", type=float, default=4.0, metavar="PX",
                    help="Peak gap between strips in pixels; rises then decays over the video")
     p.add_argument("--static-begin", type=float, default=0.0, metavar="SEC",
@@ -505,6 +507,17 @@ def main():
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     W     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     H     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Auto strip counts: swap lr/ud defaults for portrait (tall) video.
+    portrait = H > W
+    if args.n_lr is None:
+        args.n_lr = 16 if portrait else 9
+    if args.n_ud is None:
+        args.n_ud = 9 if portrait else 16
+    if portrait:
+        print(f"Portrait video detected ({W}×{H}) — using n_lr={args.n_lr}, n_ud={args.n_ud}")
+
+    shadow_color = parse_color(args.shadow_color)
 
     pad_x  = int(W * args.canvas_expand / 2)
     pad_y  = int(H * args.canvas_expand / 2)
@@ -673,15 +686,15 @@ def main():
 
             if alpha == 0.0:
                 result = apply_lr(frame, args.n_lr, pos_lr_draw, bg, pad_x, pad_y,
-                                   args.shadow_x, args.shadow_y, sep_draw)
+                                   args.shadow_x, args.shadow_y, sep_draw, shadow_color)
             elif alpha == 1.0:
                 result = apply_ud(frame, args.n_ud, pos_ud_draw, bg, pad_x, pad_y,
-                                   args.shadow_x, args.shadow_y, sep_draw)
+                                   args.shadow_x, args.shadow_y, sep_draw, shadow_color)
             else:
                 lr = apply_lr(frame, args.n_lr, pos_lr_draw, bg, pad_x, pad_y,
-                              args.shadow_x, args.shadow_y, sep_draw)
+                              args.shadow_x, args.shadow_y, sep_draw, shadow_color)
                 ud = apply_ud(frame, args.n_ud, pos_ud_draw, bg, pad_x, pad_y,
-                              args.shadow_x, args.shadow_y, sep_draw)
+                              args.shadow_x, args.shadow_y, sep_draw, shadow_color)
                 result = blend_frames(lr, ud, alpha)
 
         writer.write(result)

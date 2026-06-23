@@ -66,8 +66,8 @@ uv run python3 strip_video.py input.mp4 output.mp4 --static-begin 6 --static-end
 | Flag | Default | Description |
 |---|---|---|
 | `--mode` | `both` | `lr` = horizontal strips only, `ud` = vertical only, `both` = alternate |
-| `--n-lr` | `9` | Number of horizontal strips (left-right phase) |
-| `--n-ud` | `16` | Number of vertical strips (up-down phase) |
+| `--n-lr` | `9` / `16`† | Number of horizontal strips (left-right phase) |
+| `--n-ud` | `16` / `9`† | Number of vertical strips (up-down phase) |
 | `--freq` | `0.042` | Base oscillation frequency in Hz (~24s per cycle) |
 | `--freq-spread` | `0.35` | Per-strip frequency variation (±35% of base freq) |
 | `--phase-gap` | `π` | Phase offset between adjacent strips — π = maximum anti-phase |
@@ -75,6 +75,8 @@ uv run python3 strip_video.py input.mp4 output.mp4 --static-begin 6 --static-end
 | `--edge-margin` | `0.0` | How far short of the travel limit strips stop (0 = reach limit, 0.2 = 20% short) |
 | `--random-margin` | `0.05` | Max extra random margin re-rolled per strip each oscillation cycle |
 | `--seed` | `42` | RNG seed for per-strip randomisation |
+
+† Defaults swap automatically for portrait (H > W) video — `--n-lr` becomes 16 and `--n-ud` becomes 9. Explicitly passing either flag disables the swap for that value.
 
 ### Canvas & edges
 
@@ -89,6 +91,7 @@ uv run python3 strip_video.py input.mp4 output.mp4 --static-begin 6 --static-end
 |---|---|---|
 | `--shadow-x` | `4` | Drop shadow offset rightward in pixels (0 = disabled) |
 | `--shadow-y` | `4` | Drop shadow offset downward in pixels (0 = disabled) |
+| `--shadow-color` | `black` | Drop shadow color — named (`red`, `white`, …) or `#RRGGBB` hex |
 | `--strip-sep` | `4.0` | Peak gap between strips in pixels — rises to peak at ~20% through video, decays to 0 by end |
 | `--fade-frames` | `24` | Frames to fade video to black at each mode switch (0 = disabled) |
 
