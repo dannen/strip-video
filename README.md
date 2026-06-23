@@ -71,7 +71,7 @@ uv run python3 strip_video.py input.mp4 output.mp4 --static-begin 6 --static-end
 | `--freq` | `0.042` | Base oscillation frequency in Hz (~24s per cycle) |
 | `--freq-spread` | `0.35` | Per-strip frequency variation (±35% of base freq) |
 | `--phase-gap` | `π` | Phase offset between adjacent strips — π = maximum anti-phase |
-| `--max-speed` | `0` | Max strip velocity in px/s (0 = auto: scales with amplitude × freq) |
+| `--max-speed` | `15` | Max strip velocity in px/s (0 = auto: scales with amplitude × freq) |
 | `--edge-margin` | `0.0` | How far short of the travel limit strips stop (0 = reach limit, 0.2 = 20% short) |
 | `--random-margin` | `0.05` | Max extra random margin re-rolled per strip each oscillation cycle |
 | `--seed` | `42` | RNG seed for per-strip randomisation |

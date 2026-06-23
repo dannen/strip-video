@@ -444,7 +444,7 @@ def main():
                    help="Per-strip frequency variation (0.35 = ±35%% of base freq)")
     p.add_argument("--phase-gap", type=float, default=math.pi,
                    help="Phase offset between adjacent strips (radians); pi = max anti-phase")
-    p.add_argument("--max-speed", type=float, default=0, metavar="PX/S",
+    p.add_argument("--max-speed", type=float, default=15, metavar="PX/S",
                    help="Max strip velocity in pixels/second (0 = auto: peak natural velocity for current amplitude+freq)")
     p.add_argument("--seed", type=int, default=42,
                    help="RNG seed for per-strip randomisation")
